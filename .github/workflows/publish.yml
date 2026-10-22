@@ -1,7 +1,8 @@
 name: publish
 
-# Publishes to npm when a GitHub release is created, with provenance so anyone can
-# verify the package was built from this repository.
+# Publishes to npm when a GitHub release is created. Uses npm Trusted Publishing (OIDC):
+# no npm token is stored anywhere, and provenance is attached automatically so anyone
+# can verify the package was built from this repository.
 on:
   release:
     types: [published]
@@ -21,7 +22,7 @@ jobs:
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org
+      # Trusted Publishing needs npm 11.5+. Pinned so a new npm release cannot change this pipeline.
+      - run: npm install -g npm@11.21.0
       - run: npm test
-      - run: npm publish --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - run: npm publish --access public

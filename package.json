@@ -1,6 +1,6 @@
 {
   "name": "leakmoat",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Find leaked API keys (OpenAI, Anthropic, Gemini, Stripe, AWS and more) in your code and git history. Runs locally, zero dependencies.",
   "type": "module",
   "bin": {

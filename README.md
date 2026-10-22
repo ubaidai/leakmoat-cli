@@ -1,6 +1,6 @@
 # leakmoat
 
-[![test](https://github.com/ubaidai/leakmoat-cli/actions/workflows/test.yml/badge.svg)](https://github.com/ubaidai/leakmoat-cli/actions/workflows/test.yml)
+[![npm](https://img.shields.io/npm/v/leakmoat)](https://www.npmjs.com/package/leakmoat) [![test](https://github.com/ubaidai/leakmoat-cli/actions/workflows/test.yml/badge.svg)](https://github.com/ubaidai/leakmoat-cli/actions/workflows/test.yml)
 
 Find leaked API keys in your code **and your git history**. One command, runs on your machine, sends nothing anywhere.
 
@@ -39,6 +39,7 @@ npx leakmoat scan
 - **Zero dependencies.** Read every line before you run it: `bin/` and `src/` are under 600 lines.
 - **No network calls.** No telemetry, no "checking for updates", nothing.
 - **Never prints a full key.** Output shows a masked form like `sk-proj-…3f9a`. Keys are grouped by SHA-256, so the same key across ten files shows up once.
+- **Verifiable releases.** Every version is published from GitHub Actions through npm Trusted Publishing with provenance. No npm token exists, and npm shows which commit each release was built from.
 - Skips obvious placeholders like `sk-proj-EXAMPLE…` and local dev URLs like `postgres://postgres:postgres@localhost`.
 
 ## Options
