@@ -29,6 +29,13 @@
     "git-history"
   ],
   "homepage": "https://leakmoat.com",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ubaidai/leakmoat-cli.git"
+  },
+  "bugs": {
+    "url": "https://github.com/ubaidai/leakmoat-cli/issues"
+  },
   "license": "MIT",
   "author": "Ubaid <ubaid@leakmoat.com>"
 }

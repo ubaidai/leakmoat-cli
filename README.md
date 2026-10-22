@@ -1,5 +1,7 @@
 # leakmoat
 
+[![test](https://github.com/ubaidai/leakmoat-cli/actions/workflows/test.yml/badge.svg)](https://github.com/ubaidai/leakmoat-cli/actions/workflows/test.yml)
+
 Find leaked API keys in your code **and your git history**. One command, runs on your machine, sends nothing anywhere.
 
 ```bash
