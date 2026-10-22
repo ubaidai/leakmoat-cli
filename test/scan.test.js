@@ -117,8 +117,14 @@ test("CLI exit codes: 1 with exposed keys, 0 when clean", () => {
 });
 
 test("detects private keys and passwords in URLs, skips local dev and templates", () => {
-  assert.equal(scanLine("-----BEGIN OPENSSH PRIVATE KEY-----")[0]?.detector.id, "private-key");
-  assert.equal(scanLine("-----BEGIN RSA PRIVATE KEY-----")[0]?.detector.id, "private-key");
+  // Headers are assembled at runtime so this file never contains a key-shaped line itself.
+  const pem = (kind) => "-----BEGIN " + kind + "PRIVATE KEY-----";
+  assert.equal(scanLine(pem("OPENSSH "))[0]?.detector.id, "private-key");
+  assert.equal(scanLine("  " + pem("RSA ") + "  ")[0]?.detector.id, "private-key");
+  const json = `"private_key": "${pem("")}\\n${rand(64)}\\n"`;
+  assert.equal(scanLine(json)[0]?.detector.id, "private-key");
+  // Code that only mentions the header is not a key.
+  assert.equal(scanLine(`if (pem.startsWith("${pem("")}")) parse(pem);`).length, 0);
 
   const pass = rand(18);
   const [hit] = scanLine(`DATABASE_URL=postgresql://app:${pass}@ep-cool-db.us-east-2.aws.neon.tech/neondb`);

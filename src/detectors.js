@@ -124,6 +124,13 @@ export const DETECTORS = [
     pattern: /-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP |ENCRYPTED )?PRIVATE KEY(?: BLOCK)?-----/g,
     rotateHint: "Generate a new key pair, replace it wherever the public key is installed, then delete this one",
     skipEntropy: true,
+    // A real key: the header alone on its line (PEM file), or followed by key data inside a
+    // string (e.g. "-----BEGIN PRIVATE KEY-----\nMIIE..." in a service-account JSON).
+    // Code that merely mentions the header, like startsWith("-----BEGIN ..."), is not a key.
+    validate: (m) => {
+      if (m.input.trim() === m[0]) return true;
+      return /^\\n[A-Za-z0-9+/=]{40,}/.test(m.input.slice((m.index ?? 0) + m[0].length));
+    },
     mask: (k) => k.replace(/-/g, "").trim(),
   },
   {
