@@ -102,7 +102,7 @@ jobs:
   scan:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0          # needed to compare against the base branch
       - uses: ubaidai/leakmoat-cli@v0
