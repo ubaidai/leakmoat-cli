@@ -85,7 +85,7 @@ Good news: it has not left your machine, so there is nothing to rotate yet.
 
 ```yaml
 - repo: https://github.com/ubaidai/leakmoat-cli
-  rev: v0.3.0
+  rev: v0.3.1
   hooks:
     - id: leakmoat
 ```

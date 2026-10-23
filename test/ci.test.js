@@ -74,7 +74,7 @@ test("annotations and job summary point at the line, mask the key, and tell you 
     const summary = path.join(dir, "summary.md");
     const r = spawnSync(process.execPath, [BIN, "scan", dir, "--since", base, "--annotations", "--summary", summary], { encoding: "utf8" });
     assert.equal(r.status, 1);
-    assert.match(r.stdout, /^::error file=agent%2C v2\.ts,line=2,title=Leaked OpenAI secret::sk-proj-…/m);
+    assert.match(r.stdout, /^::error file=agent%2C v2\.ts,line=2,title=Exposed secret%3A OpenAI::sk-proj-…/m);
     assert.match(r.stdout, /Rotate it%3A|Rotate it: https:\/\/platform\.openai\.com/);
     assert.match(r.stderr, /check failed/);
     assert.match(r.stderr, /already pushed, so treat each key as exposed/);

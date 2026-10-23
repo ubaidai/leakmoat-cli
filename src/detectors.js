@@ -181,8 +181,14 @@ export function isPlaceholder(key) {
 }
 
 /** Shows enough to recognise a key without revealing it. */
+/**
+ * Shows the key's type prefix (sk-proj-, sk_live_, gsk_) and its last 4 characters, nothing else.
+ * The prefix is everything up to the last - or _ in the first 10 characters; otherwise 6 characters.
+ */
 export function maskKey(key) {
-  const headLen = Math.min(10, Math.max(4, key.indexOf("-", 4) + 1 || 6));
+  const head = key.slice(0, 10);
+  const cut = Math.max(head.lastIndexOf("-"), head.lastIndexOf("_"));
+  const headLen = cut >= 2 ? cut + 1 : Math.min(6, key.length - 4);
   return `${key.slice(0, headLen)}…${key.slice(-4)}`;
 }
 

@@ -88,7 +88,7 @@ function printHookReport(result) {
     mode === "staged"
       ? `${stats.files} staged file${stats.files === 1 ? "" : "s"}`
       : mode === "range"
-        ? `${stats.commits} commit${stats.commits === 1 ? "" : "s"} since ${stats.since}`
+        ? `${stats.commits} commit${stats.commits === 1 ? "" : "s"} since ${shortRef(stats.since)}`
         : `${stats.commits} unpushed commit${stats.commits === 1 ? "" : "s"}`;
   const out = [];
   if (findings.length === 0) {
@@ -127,6 +127,7 @@ function printHookReport(result) {
 }
 
 // GitHub Actions workflow commands: one inline annotation per location, shown on the PR diff.
+const shortRef = (ref) => (/^[0-9a-f]{40}$/.test(ref ?? "") ? ref.slice(0, 8) : ref);
 const ghEscape = (s) => String(s).replace(/%/g, "%25").replace(/\r/g, "%0D").replace(/\n/g, "%0A");
 const ghProp = (s) => ghEscape(s).replace(/:/g, "%3A").replace(/,/g, "%2C");
 
@@ -140,7 +141,7 @@ export function toAnnotations(result) {
       if (!AT_RISK.has(l.exposure)) continue;
       const props = [`file=${ghProp(l.file)}`];
       if (l.line) props.push(`line=${l.line}`);
-      props.push(`title=${ghProp(`Leaked ${f.provider} secret`)}`);
+      props.push(`title=${ghProp(`Exposed secret: ${f.provider}`)}`);
       lines.push(`::error ${props.join(",")}::${ghEscape(`${f.masked} is ${EXPLAIN[l.exposure]}. ${fix}`)}`);
     }
   }
@@ -151,7 +152,7 @@ export function toAnnotations(result) {
 export function toMarkdown(result) {
   const risky = result.findings.filter((f) => AT_RISK.has(bestExposure(f)));
   const s = result.stats;
-  const scope = s.mode === "range" ? `${s.commits} commits since \`${s.since}\`` : s.mode ? `${s.files} files` : `${s.files} files and ${s.commits} commits`;
+  const scope = s.mode === "range" ? `${s.commits} commits since \`${shortRef(s.since)}\`` : s.mode ? `${s.files} files` : `${s.files} files and ${s.commits} commits`;
   const md = ["## leakmoat", ""];
   if (risky.length === 0) {
     md.push(`✅ No exposed secrets in ${scope}.`);
