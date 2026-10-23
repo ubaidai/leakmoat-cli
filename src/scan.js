@@ -16,12 +16,12 @@ const PATCH_FLAGS = ["--no-color", "--no-ext-diff", "--unified=0"];
 
 /**
  * Where a key was seen. Severity order: about to be committed or pushed first, local is fine.
- * @typedef {"staged" | "unpushed" | "committed" | "public" | "history" | "untracked" | "local"} Exposure
+ * @typedef {"staged" | "unpushed" | "new" | "committed" | "public" | "history" | "untracked" | "local"} Exposure
  * @typedef {{ file: string, line?: number, commit?: string, date?: string, exposure: Exposure }} Location
  * @typedef {{ fingerprint: string, provider: string, masked: string, rotateUrl?: string, rotateHint?: string, locations: Location[] }} Finding
  */
 
-export const EXPOSURE_RANK = { staged: 0, unpushed: 1, committed: 2, public: 3, history: 4, untracked: 5, local: 6 };
+export const EXPOSURE_RANK = { staged: 0, unpushed: 1, new: 2, committed: 3, public: 4, history: 5, untracked: 6, local: 7 };
 
 function git(cwd, args) {
   const r = spawnSync("git", ["-C", cwd, ...args], { encoding: "utf8", maxBuffer: 256 * 1024 * 1024 });
@@ -88,7 +88,7 @@ function scanPatch(root, gitArgs, onMatch, onProgress) {
         commits++;
         if (commits % 200 === 0) onProgress?.(commits);
       } else if (line.startsWith("+++ ")) {
-        file = line.startsWith("+++ b/") ? line.slice(6) : "";
+        file = diffPath(line.slice(4));
         if (file) files.add(file);
       } else if (line.startsWith("@@")) {
         lineNo = Number(/\+(\d+)/.exec(line)?.[1] ?? 0);
@@ -100,6 +100,33 @@ function scanPatch(root, gitArgs, onMatch, onProgress) {
     child.on("error", reject);
     child.on("close", () => resolve({ commits, files }));
   });
+}
+
+/**
+ * The path from a "+++ b/path" diff header. Git appends a tab to paths containing spaces and
+ * wraps unusual paths in C-style quotes ("b/caf\303\251.js"); "/dev/null" means a deleted file.
+ */
+function diffPath(header) {
+  let p = header.replace(/\t$/, "");
+  if (p.startsWith('"') && p.endsWith('"')) {
+    const bytes = [];
+    for (let i = 1; i < p.length - 1; i++) {
+      const ch = p[i];
+      if (ch !== "\\") {
+        bytes.push(...Buffer.from(ch));
+        continue;
+      }
+      const next = p[++i];
+      if (/[0-7]/.test(next)) {
+        bytes.push(parseInt(p.slice(i, i + 3), 8));
+        i += 2;
+      } else {
+        bytes.push({ n: 10, t: 9, r: 13, '"': 34, "\\": 92 }[next] ?? next.charCodeAt(0));
+      }
+    }
+    p = Buffer.from(bytes).toString("utf8");
+  }
+  return p.startsWith("b/") ? p.slice(2) : "";
 }
 
 const fingerprint = (key) => createHash("sha256").update(key).digest("hex");
@@ -180,20 +207,27 @@ export async function scan(root, opts = {}) {
  * Hook mode: scans only what is about to leave the machine.
  *   "staged": changes staged for the next commit (pre-commit hook)
  *   "push":   commits on this branch that are on no remote yet (pre-push hook)
- * Fast, and it never blocks a commit over old keys outside the change.
+ *   "range":  commits after `since` (pull requests and CI: only what this change adds)
+ * Fast, and it never blocks a change over old keys outside it.
  * @param {string} root
- * @param {"staged" | "push"} mode
+ * @param {"staged" | "push" | "range"} mode
+ * @param {string} [since] git ref for "range", e.g. origin/main or a commit sha
  */
-export async function scanChanges(root, mode) {
+export async function scanChanges(root, mode, since) {
   root = path.resolve(root);
   if (!isGitRepo(root)) throw new Error("not a git repository, so there are no staged or unpushed changes to check");
   /** @type {Map<string, Finding>} */
   const findings = new Map();
-  const exposure = mode === "staged" ? "staged" : "unpushed";
+  const exposure = mode === "staged" ? "staged" : mode === "range" ? "new" : "unpushed";
+  if (mode === "range" && (!since || since.startsWith("-") || !git(root, ["rev-parse", "--verify", "--quiet", `${since}^{commit}`]))) {
+    throw new Error(`cannot find "${since}". In CI, check out with full history (fetch-depth: 0).`);
+  }
   const args =
     mode === "staged"
       ? ["diff", "--cached", ...PATCH_FLAGS, "--diff-filter=ACMR"]
-      : ["log", "-p", ...PATCH_FLAGS, "--format=%x00%H %aI", "HEAD", "--not", "--remotes"];
+      : mode === "range"
+        ? ["log", "-p", ...PATCH_FLAGS, "--format=%x00%H %aI", `${since}..HEAD`]
+        : ["log", "-p", ...PATCH_FLAGS, "--format=%x00%H %aI", "HEAD", "--not", "--remotes"];
 
   const { commits, files } = await scanPatch(root, args, (hit, loc) => {
     const fp = fingerprint(hit.key);
@@ -209,7 +243,7 @@ export async function scanChanges(root, mode) {
     }
   });
 
-  return { root, stats: { mode, files: files.size, commits, repo: true, historyScanned: false }, findings: [...findings.values()] };
+  return { root, stats: { mode, since, files: files.size, commits, repo: true, historyScanned: false }, findings: [...findings.values()] };
 }
 
 export function worst(f) {

@@ -36,7 +36,7 @@ npx leakmoat scan
 
 ## Built to be trusted
 
-- **Zero dependencies.** Read every line before you run it: `bin/` and `src/` are about 700 lines.
+- **Zero dependencies.** Read every line before you run it: `bin/` and `src/` are about 850 lines.
 - **No network calls.** No telemetry, no "checking for updates", nothing.
 - **Never prints a full key.** Output shows a masked form like `sk-proj-…3f9a`. Keys are grouped by SHA-256, so the same key across ten files shows up once.
 - **Verifiable releases.** Every version is published from GitHub Actions through npm Trusted Publishing with provenance. No npm token exists, and npm shows which commit each release was built from.
@@ -50,6 +50,7 @@ npx leakmoat scan --json    # machine-readable output
 npx leakmoat scan --no-history   # skip git history (faster, misses deleted keys)
 npx leakmoat scan --staged       # only staged changes (what a pre-commit hook runs)
 npx leakmoat scan --push         # only commits not pushed yet (what a pre-push hook runs)
+npx leakmoat scan --since main   # only commits after a branch or commit (pull requests, CI)
 ```
 
 Exit code `1` when exposed secrets are found, so it works in CI:
@@ -84,10 +85,32 @@ Good news: it has not left your machine, so there is nothing to rotate yet.
 
 ```yaml
 - repo: https://github.com/ubaidai/leakmoat-cli
-  rev: v0.2.0
+  rev: v0.3.0
   hooks:
     - id: leakmoat
 ```
+
+## GitHub Action
+
+Fails a pull request that adds a secret, with the finding shown inline on the diff and a summary on the run page:
+
+```yaml
+# .github/workflows/leakmoat.yml
+name: leakmoat
+on: [pull_request, push]
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # needed to compare against the base branch
+      - uses: ubaidai/leakmoat-cli@v0
+```
+
+- On a pull request it checks only the PR's commits, and on a push only the pushed commits, so old keys elsewhere never fail a check. Use `scope: full` to scan the whole repo and its history.
+- `fail-on-findings: false` reports without failing the job. The `found` output is `"true"` when something was found.
+- Runs the code in this repository on the runner itself: nothing is sent anywhere.
 
 ## Found something?
 

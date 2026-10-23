@@ -25,3 +25,16 @@ jobs:
       - run: npm test
       - name: Scan this repo with itself
         run: node bin/leakmoat.js scan .
+
+  action:
+    # Runs this repo's own GitHub Action against itself, so action.yml is tested on every push.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: ./
+        id: leakmoat
+        with:
+          scope: full
+      - run: test "${{ steps.leakmoat.outputs.found }}" = "false"

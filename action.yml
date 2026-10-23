@@ -1,0 +1,67 @@
+name: Leakmoat Secret Scan
+description: Find leaked API keys (OpenAI, Anthropic, Stripe, AWS and more) in your code and git history. Zero dependencies, no network calls.
+author: Ubaid (leakmoat.com)
+branding:
+  icon: key
+  color: orange
+
+inputs:
+  scope:
+    description: >-
+      What to scan. "auto" (default): only the commits in a pull request or push, so old keys
+      elsewhere never fail the check; a full scan for other events. "changes": always only new
+      commits. "full": the whole repo and its full git history.
+    required: false
+    default: auto
+  path:
+    description: Directory of the repository to scan.
+    required: false
+    default: "."
+  fail-on-findings:
+    description: Fail the job when an exposed secret is found.
+    required: false
+    default: "true"
+
+outputs:
+  found:
+    description: '"true" when at least one exposed secret was found.'
+    value: ${{ steps.scan.outputs.found }}
+
+runs:
+  using: composite
+  steps:
+    - id: scan
+      shell: bash
+      # Inputs and event data are passed as env vars, never pasted into the script (prevents injection).
+      env:
+        INPUT_SCOPE: ${{ inputs.scope }}
+        INPUT_PATH: ${{ inputs.path }}
+        INPUT_FAIL: ${{ inputs.fail-on-findings }}
+        EVENT_NAME: ${{ github.event_name }}
+        BASE_REF: ${{ github.base_ref }}
+        EVENT_BEFORE: ${{ github.event.before }}
+      run: |
+        set -uo pipefail
+        args=(scan "$INPUT_PATH" --annotations --summary "$GITHUB_STEP_SUMMARY")
+        zero=0000000000000000000000000000000000000000
+
+        if [ "$INPUT_SCOPE" != "full" ]; then
+          if [ "$EVENT_NAME" = "pull_request" ] || [ "$EVENT_NAME" = "pull_request_target" ]; then
+            if ! base=$(git -C "$INPUT_PATH" merge-base "origin/$BASE_REF" HEAD 2>/dev/null); then
+              echo "::error title=leakmoat::Cannot find the pull request's base branch. Use actions/checkout with fetch-depth: 0."
+              exit 2
+            fi
+            args+=(--since "$base")
+          elif [ "$EVENT_NAME" = "push" ] && [ -n "$EVENT_BEFORE" ] && [ "$EVENT_BEFORE" != "$zero" ] \
+               && git -C "$INPUT_PATH" cat-file -e "$EVENT_BEFORE^{commit}" 2>/dev/null; then
+            args+=(--since "$EVENT_BEFORE")
+          elif [ "$INPUT_SCOPE" = "changes" ]; then
+            echo "::notice title=leakmoat::No earlier commit to compare against, so scanning the full repo."
+          fi
+        fi
+
+        node "$GITHUB_ACTION_PATH/bin/leakmoat.js" "${args[@]}"
+        code=$?
+        echo "found=$([ "$code" = 1 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+        if [ "$code" = 1 ] && [ "$INPUT_FAIL" != "true" ]; then exit 0; fi
+        exit "$code"

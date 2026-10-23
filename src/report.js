@@ -15,6 +15,7 @@ const c = {
 const EXPLAIN = {
   staged: "in the changes you are about to commit",
   unpushed: "in a commit that has not been pushed yet",
+  new: "added by the commits in this change",
   committed: "committed in the repo right now; anyone with repo access can read it",
   public: "uses a public env prefix, so it ships to every visitor's browser",
   history: "deleted from the files but still in git history; every clone has it",
@@ -22,10 +23,10 @@ const EXPLAIN = {
   local: "local file, gitignored",
 };
 
-export const AT_RISK = new Set(["staged", "unpushed", "committed", "public", "history"]);
+export const AT_RISK = new Set(["staged", "unpushed", "new", "committed", "public", "history"]);
 
 function where(l) {
-  if (l.exposure === "unpushed") return `${l.file}${l.line ? c.dim(`:${l.line}`) : ""} ${c.dim(`(commit ${l.commit})`)}`;
+  if (l.exposure === "unpushed" || l.exposure === "new") return `${l.file}${l.line ? c.dim(`:${l.line}`) : ""} ${c.dim(`(commit ${l.commit})`)}`;
   if (l.exposure === "history") return `${l.file} ${c.dim(`(commit ${l.commit}, ${l.date})`)}`;
   return `${l.file}${l.line ? c.dim(`:${l.line}`) : ""}`;
 }
@@ -82,33 +83,91 @@ export function printReport(result) {
 /** Short output for pre-commit / pre-push hooks: what is blocked and exactly how to fix it. */
 function printHookReport(result) {
   const { findings, stats } = result;
-  const staged = stats.mode === "staged";
+  const mode = stats.mode; // staged | push | range
+  const scope =
+    mode === "staged"
+      ? `${stats.files} staged file${stats.files === 1 ? "" : "s"}`
+      : mode === "range"
+        ? `${stats.commits} commit${stats.commits === 1 ? "" : "s"} since ${stats.since}`
+        : `${stats.commits} unpushed commit${stats.commits === 1 ? "" : "s"}`;
   const out = [];
   if (findings.length === 0) {
-    out.push(`${c.orange("leakmoat")} ${c.green("✔")} ${c.dim(staged ? `no secrets in ${stats.files} staged file${stats.files === 1 ? "" : "s"}` : `no secrets in ${stats.commits} unpushed commit${stats.commits === 1 ? "" : "s"}`)}`);
+    out.push(`${c.orange("leakmoat")} ${c.green("✔")} ${c.dim(`no secrets in ${scope}`)}`);
     return out.join("\n");
   }
+  const action = mode === "staged" ? "commit blocked" : mode === "push" ? "push blocked" : "check failed";
   out.push("");
-  out.push(
-    c.red(c.bold(`✖ leakmoat: ${staged ? "commit" : "push"} blocked, ${findings.length} secret${findings.length > 1 ? "s" : ""} ${staged ? "in your staged changes" : "in unpushed commits"}`)),
-  );
+  out.push(c.red(c.bold(`✖ leakmoat: ${action}, ${findings.length} secret${findings.length > 1 ? "s" : ""} in ${scope}`)));
   out.push("");
   for (const f of findings) {
     out.push(`  ${c.red("●")} ${c.bold(f.provider)}  ${c.dim(f.masked)}`);
     for (const l of f.locations.slice(0, 5)) out.push(`      ${where(l)}`);
     if (f.locations.length > 5) out.push(c.dim(`      and ${f.locations.length - 5} more places`));
+    if (mode === "range") out.push(f.rotateUrl ? `      Rotate: ${c.cyan(f.rotateUrl)}` : `      Fix: ${f.rotateHint}.`);
   }
   out.push("");
-  out.push(c.bold("Good news: it has not left your machine, so there is nothing to rotate yet."));
-  if (staged) {
-    out.push("  1. Move the value to an env var or secret store, then `git add` the file again.");
+  if (mode === "range") {
+    // In CI the commit is already on GitHub: treat the key as exposed.
+    out.push(c.bold("These commits are already pushed, so treat each key as exposed:"));
+    out.push("  1. Rotate it now with the link above.");
+    out.push("  2. Remove it from the branch before merging, and load it from an env var or secret store instead.");
+    out.push("  3. False positive? Add a `leakmoat:ignore` comment on that line.");
   } else {
-    out.push("  1. Remove the value, then rewrite the unpushed commit (`git commit --amend`, or `git rebase -i` for older ones).");
+    out.push(c.bold("Good news: it has not left your machine, so there is nothing to rotate yet."));
+    if (mode === "staged") {
+      out.push("  1. Move the value to an env var or secret store, then `git add` the file again.");
+    } else {
+      out.push("  1. Remove the value, then rewrite the unpushed commit (`git commit --amend`, or `git rebase -i` for older ones).");
+    }
+    out.push("  2. False positive? Add a `leakmoat:ignore` comment on that line.");
+    out.push(c.dim(`  Emergency only: \`git ${mode === "staged" ? "commit" : "push"} --no-verify\` skips this check.`));
   }
-  out.push("  2. False positive? Add a `leakmoat:ignore` comment on that line.");
-  out.push(c.dim(`  Emergency only: \`git ${staged ? "commit" : "push"} --no-verify\` skips this check.`));
   out.push("");
   return out.join("\n");
+}
+
+// GitHub Actions workflow commands: one inline annotation per location, shown on the PR diff.
+const ghEscape = (s) => String(s).replace(/%/g, "%25").replace(/\r/g, "%0D").replace(/\n/g, "%0A");
+const ghProp = (s) => ghEscape(s).replace(/:/g, "%3A").replace(/,/g, "%2C");
+
+export function toAnnotations(result) {
+  const lines = [];
+  for (const f of result.findings) {
+    const exp = bestExposure(f);
+    if (!AT_RISK.has(exp)) continue;
+    const fix = f.rotateUrl ? `Rotate it: ${f.rotateUrl}` : `${f.rotateHint}.`;
+    for (const l of f.locations) {
+      if (!AT_RISK.has(l.exposure)) continue;
+      const props = [`file=${ghProp(l.file)}`];
+      if (l.line) props.push(`line=${l.line}`);
+      props.push(`title=${ghProp(`Leaked ${f.provider} secret`)}`);
+      lines.push(`::error ${props.join(",")}::${ghEscape(`${f.masked} is ${EXPLAIN[l.exposure]}. ${fix}`)}`);
+    }
+  }
+  return lines.join("\n");
+}
+
+/** Markdown for the GitHub Actions job summary. Masked values only. */
+export function toMarkdown(result) {
+  const risky = result.findings.filter((f) => AT_RISK.has(bestExposure(f)));
+  const s = result.stats;
+  const scope = s.mode === "range" ? `${s.commits} commits since \`${s.since}\`` : s.mode ? `${s.files} files` : `${s.files} files and ${s.commits} commits`;
+  const md = ["## leakmoat", ""];
+  if (risky.length === 0) {
+    md.push(`✅ No exposed secrets in ${scope}.`);
+  } else {
+    md.push(`❌ **${risky.length} exposed secret${risky.length > 1 ? "s" : ""}** in ${scope}.`, "");
+    md.push("| Secret | Where | Fix |", "|---|---|---|");
+    for (const f of risky) {
+      const l = f.locations[0];
+      const where = `\`${l.file}${l.line ? `:${l.line}` : ""}\`${l.commit ? ` (${l.commit})` : ""}${f.locations.length > 1 ? ` +${f.locations.length - 1} more` : ""}`;
+      const fix = f.rotateUrl ? `[Rotate](${f.rotateUrl})` : f.rotateHint;
+      md.push(`| ${f.provider} \`${f.masked}\` | ${where} | ${fix} |`);
+    }
+    md.push("", "Remove each value from the code, load it from a secret store, and rotate it. False positive? Add a `leakmoat:ignore` comment on that line.");
+  }
+  md.push("", "<sub>Scanned by [leakmoat](https://github.com/ubaidai/leakmoat-cli). Nothing left the runner.</sub>", "");
+  return md.join("\n");
 }
 
 function bestExposure(f) {

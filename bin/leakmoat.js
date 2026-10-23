@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-import { readFileSync } from "node:fs";
+import { appendFileSync, readFileSync } from "node:fs";
 import { scan, scanChanges } from "../src/scan.js";
-import { hasRisk, printReport, toJSON } from "../src/report.js";
+import { hasRisk, printReport, toAnnotations, toJSON, toMarkdown } from "../src/report.js";
 import { hookCommand, installHook } from "../src/hook.js";
 
 const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
@@ -13,6 +13,7 @@ Usage
   npx leakmoat scan [dir]            Scan files and full git history
   npx leakmoat scan --staged         Scan only staged changes (for a pre-commit hook)
   npx leakmoat scan --push           Scan only commits not pushed yet (for a pre-push hook)
+  npx leakmoat scan --since <ref>    Scan only commits after <ref> (pull requests, CI)
   npx leakmoat install-hook          Block commits that contain a secret
   npx leakmoat install-hook --pre-push
 
@@ -20,6 +21,8 @@ Options
   --no-history   Skip git history (faster, but misses deleted keys)
   --json         Machine-readable output
   --force        install-hook: replace an existing hook
+  --annotations  Also print GitHub Actions annotations (inline on the PR diff)
+  --summary <f>  Append a markdown summary to file <f> (e.g. $GITHUB_STEP_SUMMARY)
   -h, --help     Show this help
   -v, --version  Show version
 
@@ -31,9 +34,15 @@ Exit codes
 https://leakmoat.com`;
 
 function parse(argv) {
-  const opts = { cmd: "scan", dir: ".", history: true, json: false, mode: null, prePush: false, force: false };
+  const opts = { cmd: "scan", dir: ".", history: true, json: false, mode: null, since: null, prePush: false, force: false, annotations: false, summary: null };
   const rest = [];
-  for (const a of argv) {
+  const value = (i, flag) => {
+    const v = argv[i + 1];
+    if (!v || v.startsWith("--")) throw new Error(`${flag} needs a value.`);
+    return v;
+  };
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
     if (a === "-h" || a === "--help") opts.cmd = "help";
     else if (a === "-v" || a === "--version") opts.cmd = "version";
     else if (a === "--no-history") opts.history = false;
@@ -42,6 +51,9 @@ function parse(argv) {
     else if (a === "--push" || a === "--unpushed") opts.mode = "push";
     else if (a === "--pre-push") opts.prePush = true;
     else if (a === "--force") opts.force = true;
+    else if (a === "--annotations") opts.annotations = true;
+    else if (a === "--since") (opts.mode = "range"), (opts.since = value(i, a)), i++;
+    else if (a === "--summary") (opts.summary = value(i, a)), i++;
     else if (a.startsWith("-")) throw new Error(`Unknown option ${a}. Run with --help.`);
     else rest.push(a);
   }
@@ -74,7 +86,8 @@ async function main() {
   if (opts.cmd === "install-hook") return runInstallHook(opts);
 
   if (opts.mode) {
-    const result = await scanChanges(opts.dir, opts.mode);
+    const result = await scanChanges(opts.dir, opts.mode, opts.since);
+    report(result, opts);
     const output = opts.json ? toJSON(result) : printReport(result);
     // A blocked commit goes to stderr so git shows it; JSON always goes to stdout for tools.
     (hasRisk(result) && !opts.json ? console.error : console.log)(output);
@@ -88,8 +101,18 @@ async function main() {
   });
   if (progress) process.stderr.write("\r\x1b[2K");
 
+  report(result, opts);
   console.log(opts.json ? toJSON(result) : printReport(result));
   return hasRisk(result) ? 1 : 0;
+}
+
+/** CI extras: inline annotations and a markdown job summary. */
+function report(result, opts) {
+  if (opts.annotations) {
+    const a = toAnnotations(result);
+    if (a) console.log(a);
+  }
+  if (opts.summary) appendFileSync(opts.summary, toMarkdown(result));
 }
 
 // Set exitCode instead of calling process.exit(), which can truncate piped output on Windows.
