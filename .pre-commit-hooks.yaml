@@ -1,0 +1,14 @@
+- id: leakmoat
+  name: leakmoat (block API keys in staged changes)
+  description: Refuses the commit when staged changes contain an API key or other secret. Runs locally.
+  entry: leakmoat scan --staged
+  language: node
+  pass_filenames: false
+  stages: [pre-commit]
+- id: leakmoat-pre-push
+  name: leakmoat (block API keys in unpushed commits)
+  description: Refuses the push when unpushed commits contain an API key or other secret. Runs locally.
+  entry: leakmoat scan --push
+  language: node
+  pass_filenames: false
+  stages: [pre-push]

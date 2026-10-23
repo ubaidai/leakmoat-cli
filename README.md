@@ -36,7 +36,7 @@ npx leakmoat scan
 
 ## Built to be trusted
 
-- **Zero dependencies.** Read every line before you run it: `bin/` and `src/` are under 600 lines.
+- **Zero dependencies.** Read every line before you run it: `bin/` and `src/` are about 700 lines.
 - **No network calls.** No telemetry, no "checking for updates", nothing.
 - **Never prints a full key.** Output shows a masked form like `sk-proj-…3f9a`. Keys are grouped by SHA-256, so the same key across ten files shows up once.
 - **Verifiable releases.** Every version is published from GitHub Actions through npm Trusted Publishing with provenance. No npm token exists, and npm shows which commit each release was built from.
@@ -48,12 +48,45 @@ npx leakmoat scan
 npx leakmoat scan [dir]     # default: current directory
 npx leakmoat scan --json    # machine-readable output
 npx leakmoat scan --no-history   # skip git history (faster, misses deleted keys)
+npx leakmoat scan --staged       # only staged changes (what a pre-commit hook runs)
+npx leakmoat scan --push         # only commits not pushed yet (what a pre-push hook runs)
 ```
 
 Exit code `1` when exposed secrets are found, so it works in CI:
 
 ```yaml
 - run: npx leakmoat scan
+```
+
+## Block secrets before they leave your machine
+
+Catch a key at commit time, before it ever reaches git history:
+
+```bash
+npx leakmoat install-hook             # pre-commit: checks only your staged changes
+npx leakmoat install-hook --pre-push  # pre-push: checks only commits not pushed yet
+```
+
+```
+✖ leakmoat: commit blocked, 1 secret in your staged changes
+
+  ● OpenAI  sk-proj-…3f9a
+      src/agent.ts:4
+
+Good news: it has not left your machine, so there is nothing to rotate yet.
+  1. Move the value to an env var or secret store, then `git add` the file again.
+  2. False positive? Add a `leakmoat:ignore` comment on that line.
+```
+
+- Hook mode scans only the change, so it is fast and never blocks you over old keys elsewhere in the repo.
+- An existing hook (Husky, lefthook) is never overwritten. Add `npx leakmoat scan --staged` to it instead.
+- With the [pre-commit](https://pre-commit.com) framework:
+
+```yaml
+- repo: https://github.com/ubaidai/leakmoat-cli
+  rev: v0.2.0
+  hooks:
+    - id: leakmoat
 ```
 
 ## Found something?

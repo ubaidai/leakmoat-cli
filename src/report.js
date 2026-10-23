@@ -13,6 +13,8 @@ const c = {
 };
 
 const EXPLAIN = {
+  staged: "in the changes you are about to commit",
+  unpushed: "in a commit that has not been pushed yet",
   committed: "committed in the repo right now; anyone with repo access can read it",
   public: "uses a public env prefix, so it ships to every visitor's browser",
   history: "deleted from the files but still in git history; every clone has it",
@@ -20,14 +22,16 @@ const EXPLAIN = {
   local: "local file, gitignored",
 };
 
-export const AT_RISK = new Set(["committed", "public", "history"]);
+export const AT_RISK = new Set(["staged", "unpushed", "committed", "public", "history"]);
 
 function where(l) {
+  if (l.exposure === "unpushed") return `${l.file}${l.line ? c.dim(`:${l.line}`) : ""} ${c.dim(`(commit ${l.commit})`)}`;
   if (l.exposure === "history") return `${l.file} ${c.dim(`(commit ${l.commit}, ${l.date})`)}`;
   return `${l.file}${l.line ? c.dim(`:${l.line}`) : ""}`;
 }
 
 export function printReport(result) {
+  if (result.stats.mode) return printHookReport(result);
   const { findings, stats } = result;
   const risky = findings.filter((f) => AT_RISK.has(bestExposure(f)));
   const check = findings.filter((f) => bestExposure(f) === "untracked");
@@ -71,6 +75,38 @@ export function printReport(result) {
     out.push("");
   }
   out.push(c.dim(`Get alerts on new leaks and spend spikes, and rotate everywhere in one pass: ${c.cyan("https://leakmoat.com/?ref=cli")}`));
+  out.push("");
+  return out.join("\n");
+}
+
+/** Short output for pre-commit / pre-push hooks: what is blocked and exactly how to fix it. */
+function printHookReport(result) {
+  const { findings, stats } = result;
+  const staged = stats.mode === "staged";
+  const out = [];
+  if (findings.length === 0) {
+    out.push(`${c.orange("leakmoat")} ${c.green("✔")} ${c.dim(staged ? `no secrets in ${stats.files} staged file${stats.files === 1 ? "" : "s"}` : `no secrets in ${stats.commits} unpushed commit${stats.commits === 1 ? "" : "s"}`)}`);
+    return out.join("\n");
+  }
+  out.push("");
+  out.push(
+    c.red(c.bold(`✖ leakmoat: ${staged ? "commit" : "push"} blocked, ${findings.length} secret${findings.length > 1 ? "s" : ""} ${staged ? "in your staged changes" : "in unpushed commits"}`)),
+  );
+  out.push("");
+  for (const f of findings) {
+    out.push(`  ${c.red("●")} ${c.bold(f.provider)}  ${c.dim(f.masked)}`);
+    for (const l of f.locations.slice(0, 5)) out.push(`      ${where(l)}`);
+    if (f.locations.length > 5) out.push(c.dim(`      and ${f.locations.length - 5} more places`));
+  }
+  out.push("");
+  out.push(c.bold("Good news: it has not left your machine, so there is nothing to rotate yet."));
+  if (staged) {
+    out.push("  1. Move the value to an env var or secret store, then `git add` the file again.");
+  } else {
+    out.push("  1. Remove the value, then rewrite the unpushed commit (`git commit --amend`, or `git rebase -i` for older ones).");
+  }
+  out.push("  2. False positive? Add a `leakmoat:ignore` comment on that line.");
+  out.push(c.dim(`  Emergency only: \`git ${staged ? "commit" : "push"} --no-verify\` skips this check.`));
   out.push("");
   return out.join("\n");
 }

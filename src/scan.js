@@ -12,15 +12,16 @@ const SKIP_DIRS = new Set([
 ]);
 const MAX_FILE_BYTES = 2 * 1024 * 1024;
 const BINARY_EXT = /\.(png|jpe?g|gif|webp|ico|pdf|zip|gz|tgz|7z|rar|mp[34]|mov|woff2?|ttf|otf|eot|exe|dll|so|dylib|bin|lockb|sqlite|db)$/i;
+const PATCH_FLAGS = ["--no-color", "--no-ext-diff", "--unified=0"];
 
 /**
- * Where a key was seen. Severity order: committed and public are worst, local is fine.
- * @typedef {"committed" | "public" | "history" | "untracked" | "local"} Exposure
+ * Where a key was seen. Severity order: about to be committed or pushed first, local is fine.
+ * @typedef {"staged" | "unpushed" | "committed" | "public" | "history" | "untracked" | "local"} Exposure
  * @typedef {{ file: string, line?: number, commit?: string, date?: string, exposure: Exposure }} Location
  * @typedef {{ fingerprint: string, provider: string, masked: string, rotateUrl?: string, rotateHint?: string, locations: Location[] }} Finding
  */
 
-export const EXPOSURE_RANK = { committed: 0, public: 1, history: 2, untracked: 3, local: 4 };
+export const EXPOSURE_RANK = { staged: 0, unpushed: 1, committed: 2, public: 3, history: 4, untracked: 5, local: 6 };
 
 function git(cwd, args) {
   const r = spawnSync("git", ["-C", cwd, ...args], { encoding: "utf8", maxBuffer: 256 * 1024 * 1024 });
@@ -66,19 +67,21 @@ async function scanFile(fullPath, onMatch) {
   }
 }
 
-/** Streams `git log -p` over every branch and reports keys on added lines. */
-function scanHistory(root, onMatch, onProgress) {
+/**
+ * Streams a git diff or `git log -p` (run with --unified=0) and reports keys on added lines,
+ * with the file, the line number in the new version, and the commit when there is one.
+ * Resolves with the number of commits seen and the files touched.
+ */
+function scanPatch(root, gitArgs, onMatch, onProgress) {
   return new Promise((resolve, reject) => {
-    const child = spawn(
-      "git",
-      ["-C", root, "log", "--all", "-p", "--no-color", "--no-ext-diff", "--unified=0", "--format=%x00%H %aI"],
-      { stdio: ["ignore", "pipe", "ignore"] },
-    );
+    const child = spawn("git", ["-C", root, ...gitArgs], { stdio: ["ignore", "pipe", "ignore"] });
     const rl = createInterface({ input: child.stdout, crlfDelay: Infinity });
     let commit = "";
     let date = "";
     let file = "";
+    let lineNo = 0;
     let commits = 0;
+    const files = new Set();
     rl.on("line", (line) => {
       if (line.startsWith("\0")) {
         [commit, date] = line.slice(1).split(" ");
@@ -86,16 +89,31 @@ function scanHistory(root, onMatch, onProgress) {
         if (commits % 200 === 0) onProgress?.(commits);
       } else if (line.startsWith("+++ ")) {
         file = line.startsWith("+++ b/") ? line.slice(6) : "";
+        if (file) files.add(file);
+      } else if (line.startsWith("@@")) {
+        lineNo = Number(/\+(\d+)/.exec(line)?.[1] ?? 0);
       } else if (line.startsWith("+") && file) {
-        for (const hit of scanLine(line.slice(1))) onMatch(hit, { file, commit, date });
+        for (const hit of scanLine(line.slice(1))) onMatch(hit, { file, line: lineNo, commit, date });
+        lineNo++;
       }
     });
     child.on("error", reject);
-    child.on("close", () => resolve(commits));
+    child.on("close", () => resolve({ commits, files }));
   });
 }
 
 const fingerprint = (key) => createHash("sha256").update(key).digest("hex");
+
+function newFinding(hit) {
+  return {
+    fingerprint: fingerprint(hit.key),
+    provider: hit.detector.provider,
+    masked: hit.detector.mask?.(hit.key) ?? maskKey(hit.key),
+    rotateUrl: hit.detector.rotateUrl,
+    rotateHint: hit.detector.rotateHint,
+    locations: [],
+  };
+}
 
 /**
  * Scans a directory. Never stores or returns a full key: only its SHA-256 and a masked form.
@@ -113,7 +131,7 @@ export async function scan(root, opts = {}) {
     const fp = fingerprint(hit.key);
     let f = findings.get(fp);
     if (!f) {
-      f = { fingerprint: fp, provider: hit.detector.provider, masked: hit.detector.mask?.(hit.key) ?? maskKey(hit.key), rotateUrl: hit.detector.rotateUrl, rotateHint: hit.detector.rotateHint, locations: [] };
+      f = newFinding(hit);
       findings.set(fp, f);
     }
     const exposure = hit.publicPrefix && loc.exposure !== "history" ? "public" : loc.exposure;
@@ -138,8 +156,9 @@ export async function scan(root, opts = {}) {
     for (const f of findings.values()) {
       if (f.locations.some((l) => l.exposure === "committed" || l.exposure === "public")) currentlyCommitted.add(f.fingerprint);
     }
-    stats.commits = await scanHistory(
+    ({ commits: stats.commits } = await scanPatch(
       root,
+      ["log", "--all", "-p", ...PATCH_FLAGS, "--format=%x00%H %aI"],
       (hit, { file, commit, date }) => {
         const fp = fingerprint(hit.key);
         // A key that is still committed is already reported at its current location.
@@ -149,12 +168,48 @@ export async function scan(root, opts = {}) {
         record(hit, { file, commit: commit.slice(0, 8), date: date?.slice(0, 10), exposure: "history" });
       },
       (n) => opts.onProgress?.(`Scanned ${n} commits`),
-    );
+    ));
     stats.historyScanned = true;
   }
 
   const list = [...findings.values()].sort((a, b) => worst(a) - worst(b));
   return { root, stats, findings: list };
+}
+
+/**
+ * Hook mode: scans only what is about to leave the machine.
+ *   "staged": changes staged for the next commit (pre-commit hook)
+ *   "push":   commits on this branch that are on no remote yet (pre-push hook)
+ * Fast, and it never blocks a commit over old keys outside the change.
+ * @param {string} root
+ * @param {"staged" | "push"} mode
+ */
+export async function scanChanges(root, mode) {
+  root = path.resolve(root);
+  if (!isGitRepo(root)) throw new Error("not a git repository, so there are no staged or unpushed changes to check");
+  /** @type {Map<string, Finding>} */
+  const findings = new Map();
+  const exposure = mode === "staged" ? "staged" : "unpushed";
+  const args =
+    mode === "staged"
+      ? ["diff", "--cached", ...PATCH_FLAGS, "--diff-filter=ACMR"]
+      : ["log", "-p", ...PATCH_FLAGS, "--format=%x00%H %aI", "HEAD", "--not", "--remotes"];
+
+  const { commits, files } = await scanPatch(root, args, (hit, loc) => {
+    const fp = fingerprint(hit.key);
+    let f = findings.get(fp);
+    if (!f) {
+      f = newFinding(hit);
+      findings.set(fp, f);
+    }
+    const location = { file: loc.file, line: loc.line, exposure };
+    if (loc.commit) Object.assign(location, { commit: loc.commit.slice(0, 8), date: loc.date?.slice(0, 10) });
+    if (!f.locations.some((l) => l.file === location.file && l.line === location.line && l.commit === location.commit)) {
+      f.locations.push(location);
+    }
+  });
+
+  return { root, stats: { mode, files: files.size, commits, repo: true, historyScanned: false }, findings: [...findings.values()] };
 }
 
 export function worst(f) {

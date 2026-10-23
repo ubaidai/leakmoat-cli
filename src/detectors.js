@@ -189,6 +189,8 @@ export function maskKey(key) {
  * @returns {{ detector: Detector, key: string, publicPrefix: boolean }[]}
  */
 export function scanLine(line) {
+  // An explicit `leakmoat:ignore` comment on the line marks a known false positive.
+  if (/leakmoat[:-]ignore/i.test(line)) return [];
   if (line.length > 5000) line = line.slice(0, 5000); // minified bundles
   const results = [];
   const taken = [];
