@@ -41,10 +41,19 @@ test("detects each provider format", () => {
   }
 });
 
+test("never misses a real-format key because it happens to look less random", () => {
+  for (let i = 0; i < 5000; i++) {
+    const key = `AKIA${[...randomBytes(16)].map((b) => "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"[b % 32]).join("")}`;
+    assert.equal(scanLine(`aws_access_key_id = ${key}`).length, 1, `missed ${key}`);
+  }
+});
+
 test("ignores placeholders and low-entropy examples", () => {
   assert.equal(scanLine('OPENAI_API_KEY="sk-proj-EXAMPLEEXAMPLEEXAMPLEEXAMPLE"').length, 0);
   assert.equal(scanLine("key: sk-proj-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx").length, 0);
   assert.ok(isPlaceholder("sk-proj-aaaaaaaaaaaaaaaaaaaaaaaaaaaa"));
+  assert.ok(isPlaceholder("AKIAAAAAAAAAAAAAAAAA"));
+  assert.equal(scanLine("key = AKIAIOSFODNN7EXAMPLE").length, 0); // AWS docs example
 });
 
 test("flags public env prefixes", () => {
@@ -136,4 +145,5 @@ test("detects private keys and passwords in URLs, skips local dev and templates"
   assert.equal(scanLine("DATABASE_URL=postgres://postgres:postgres@localhost:5432/app").length, 0);
   assert.equal(scanLine("url = `postgres://${user}:${pass}@${host}/db`").length, 0);
   assert.equal(scanLine("redis://default:password@redis.example.com").length, 0);
+  assert.equal(scanLine("DATABASE_URL=postgresql://postgres:...@postgres.railway.internal:5432/railway").length, 0);
 });

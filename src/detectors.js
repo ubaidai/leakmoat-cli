@@ -142,7 +142,7 @@ export const DETECTORS = [
     validate: (m) => {
       const [, , pass, host] = m;
       if (/^(localhost|127\.0\.0\.1|0\.0\.0\.0|host\.docker\.internal|db|postgres|mysql|redis|mongo|example\.(com|org))$/i.test(host)) return false;
-      if (/^(password|pass|passwd|secret|changeme|postgres|root|user|test|xxx+|\*+)$/i.test(pass)) return false;
+      if (/^(password|pass|passwd|secret|changeme|postgres|root|user|test|xxx+|\*+|\.{2,}|…+|•+)$/i.test(pass)) return false; // "..." in docs
       if (/[$%{<]/.test(pass)) return false; // ${VAR}, %s, {{x}}, <password> templates
       return true;
     },
@@ -175,7 +175,9 @@ export function entropy(s) {
 }
 
 export function isPlaceholder(key) {
-  return PLACEHOLDER.test(key) || entropy(key) < 3.2;
+  // Short keys (AWS: 20 chars, uppercase only) are naturally less random than long ones,
+  // so the bar scales with length. A flat 3.2 silently missed about 1 in 300 real AWS keys.
+  return PLACEHOLDER.test(key) || entropy(key) < (key.length >= 32 ? 3.0 : 2.5);
 }
 
 /** Shows enough to recognise a key without revealing it. */
